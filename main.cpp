@@ -28,17 +28,13 @@
 
 
 
-#include <iostream>
-#include <fstream>
-#include <cmath>
 
 #define ARMA_NO_DEBUG//no control and more speed
 
-#include <armadillo>
-#include <iomanip>
-#include <algorithm>
-
 #include "funzioni.h"
+#include "errors.h"
+#include "plots.h"  
+#include "reticolo.h"
 
 /*** variabili globali ***/
 
@@ -59,35 +55,46 @@ void obs_T(mat &r, double J, double T_c, double L, int *data);
 
 
 int main() {
-    srand(1);//default seed = 1
-    int N_t;//number of iterations of the simulation
+   
+    //default seed = 1
+    srand(1);
 
-    double passi_eq;//to be defined later in code
+    //number of iterations of the simulation
+    int N_t;
+
+    //to be defined later in code
+    double passi_eq;
     double J = 1;
 
+    // 0 random metropolis, 1 sequential metropolis , 2 wolff
     int prog_t = 2; 
-    //0 random metropolis, 1 sequential metropolis , 2 wolff
-    int c_Tm = -1;//set -1 to have O(T), not -1 shows temperature T=T_c+2
-    int c_Lm = 0;//set -1 to have O(T,L)
 
-    double T_c[] = {2.269, 1.519};
+    //set -1 to have O(T), not -1 shows temperature T=T_c+2
+    int c_Tm = -1;
+
+    //set -1 to have O(T,L)
+    int c_Lm = 0;
+
     //critical temperature value for square and exagonal lattice
+    double T_c[] = {2.269, 1.519};
 
-    rowvec L = {8, 16, 32, 64};
     //number of spins per dimension of the lattice, in total the spins are N=LxL
     //128 takes quite long, closest to infinite system
     //for exagonal use only multiples of 8
+    rowvec L = {8, 16, 32, 64};
 
     int initial_data[] = {c_Lm, c_Tm, N_t, prog_t};
 
     obs(L, T_c, J, initial_data);
 
-    plot_osservabili_T(c_Tm);
     //in metropolis the dimension of clusters is obviously zero
+    plot_osservabili_T(c_Tm);
 
-    // blocking_plot();//plots bloking results
+    // plots bloking results
+    // blocking_plot();
 
-    // plot_reticolo();//execute after obs to plot the lattice
+    //execute after obs to plot the lattice
+    // plot_reticolo();
 
     return 0;
 }
@@ -145,6 +152,8 @@ void obs(rowvec L, double *T_c_vec, double J, int *data){
         }
         risultati << "L=" << L(caso) << endl;
         results_scaled << "L=" << L(caso) << endl;
+
+        // makes the simulation at prescribed temperature for the chosen lattice size
         obs_T(r, J, T_c, L(caso), data);
 
         if(c_Tm != -1){
