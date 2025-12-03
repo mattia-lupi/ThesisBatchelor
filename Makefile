@@ -1,7 +1,7 @@
 CXX = g++
 # -MMD -MP: Generates dependency files (.d)
 # -Iinclude: Looks for headers in the include/ folder
-CXXFLAGS = -std=c++14 -O2 -I/opt/homebrew/include -Iinclude -Iplt -MMD -MP
+CXXFLAGS = -std=c++14 -O3 -I/opt/homebrew/include -Iinclude -Iplt 
 LDFLAGS = -L/opt/homebrew/lib -larmadillo
 
 TARGET = main.out
