@@ -28,13 +28,14 @@
 
 
 
-
-#define ARMA_NO_DEBUG//no control and more speed
+#define ARMA_NO_DEBUG //no control and more speed
 
 #include "funzioni.h"
 #include "errors.h"
-#include "plots.h"  
+#include "plots.h"
 #include "reticolo.h"
+#include <chrono>
+#include <vector> // Added for speed over arma::mat where possible
 
 /*** variabili globali ***/
 
@@ -48,14 +49,12 @@ string obs_path = "out/osservabili.txt";
 string dati_path = "out/dati.txt";
 string risultati_path = "out/risultati.txt";
 
-ofstream dati, osservabili, risultati,results_scaled;
+ofstream dati, osservabili, risultati, results_scaled;
 
 void obs(rowvec L, double *T_c_vec, double J, int *data);
 void obs_T(mat &r, double J, double T_c, double L, int *data);
 
-
 int main() {
-   
     //default seed = 1
     srand(1);
 
@@ -67,25 +66,26 @@ int main() {
     double J = 1;
 
     // 0 random metropolis, 1 sequential metropolis , 2 wolff
-    int prog_t = 2; 
+    int prog_t = 2;
 
     //set -1 to have O(T), not -1 shows temperature T=T_c+2
     int c_Tm = -1;
 
     //set -1 to have O(T,L)
-    int c_Lm = 0;
+    int c_Lm = -1;
 
     //critical temperature value for square and exagonal lattice
     double T_c[] = {2.269, 1.519};
-
-    //number of spins per dimension of the lattice, in total the spins are N=LxL
-    //128 takes quite long, closest to infinite system
-    //for exagonal use only multiples of 8
     rowvec L = {8, 16, 32, 64};
 
     int initial_data[] = {c_Lm, c_Tm, N_t, prog_t};
 
+    auto start = std::chrono::high_resolution_clock::now();
     obs(L, T_c, J, initial_data);
+    auto end = std::chrono::high_resolution_clock::now();
+    
+    chrono::duration<double> elapsed = end - start;
+    cout << "Elapsed time: " << elapsed.count() << " s\n";
 
     //in metropolis the dimension of clusters is obviously zero
     plot_osservabili_T(c_Tm);
@@ -99,72 +99,65 @@ int main() {
     return 0;
 }
 
-
 void obs(rowvec L, double *T_c_vec, double J, int *data){
     int c_Lm = data[0];
     int c_Tm = data[1];
+    
     risultati.open(risultati_path);
     results_scaled.open("out/results_scaled.txt");
-    int caso_max;
-    if (c_Lm == -1) {
-        caso_max = L.size();
-    } else {
-        caso_max = c_Lm + 1;
-    }
-    int start;
-    if(c_Lm == -1){
-        start = c_Lm + 1;
-    }
-    else{
-        start =  c_Lm;
-    }
+    
+    int caso_max = (c_Lm == -1) ? L.size() : c_Lm + 1;
+    int start = (c_Lm == -1) ? c_Lm + 1 : c_Lm;
+    
     double T_c;
+    
     for (int caso = start; caso < caso_max; ++caso){
-    //execute to have the changes in function of L
-        N = pow1(L(caso), 2);
+        N = (int)(L(caso) * L(caso)); 
         mat r(N,3);
+        
         if(pv==4){
             crea_reticolo_quadrato(r, L(caso));
-            //creates the lattice with all spin "1"
             T_c = T_c_vec[0];
         }
         else if(pv==3){
             crea_reticolo_esagonale(r, L(caso));
-            //creates the lattice with all spin "1"
             T_c = T_c_vec[1];
         }
         else{
-            cout<<"Lattice not avalilable,";
-            cout<<" the square lattice is going to be presented"<<endl;
+            cout << "Lattice not available, the square lattice is going to be presented" << "\n"; 
             pv=4;
             crea_reticolo_quadrato(r, L(caso));
-            //creates the lattice with all spin "1"
             T_c = T_c_vec[0];
         }
-        crea_primi_vicini(L(caso), p_v_path);
+        
         //creates a file with the first nearest neighbours for each spin
+        crea_primi_vicini(L(caso), p_v_path);
+        
         if (c_Lm == -1){
-            cout<<"Executing lattice of N = "<<L(caso)<<"x"<<L(caso)<<endl;
+            cout << "Executing lattice of N = " << L(caso) << "x" << L(caso) << "\n";
         }
+        
         if (caso != 0 && c_Lm == -1){
             risultati << "\n\n";
             results_scaled << "\n\n";
         }
-        risultati << "L=" << L(caso) << endl;
-        results_scaled << "L=" << L(caso) << endl;
+        
+        risultati << "L=" << L(caso) << "\n";
+        results_scaled << "L=" << L(caso) << "\n";
 
         // makes the simulation at prescribed temperature for the chosen lattice size
         obs_T(r, J, T_c, L(caso), data);
 
-        if(c_Tm != -1){
         //if I want how a single observable progresses over the iterations
         // I execute it only once
+        if(c_Tm != -1){
             break;
         }
     }
     risultati.close();
     results_scaled.close();
 }
+
 void obs_T(mat &r, double J, double T_c, double L, int *data){
     int c_Lm = data[0];
     int c_Tm = data[1];
@@ -173,16 +166,20 @@ void obs_T(mat &r, double J, double T_c, double L, int *data){
 
     double T_scaled;
 
-    mat prim_vic(N,pv);
-
+    // OPTIMIZATION: Use std::vector for faster access than arma::mat
+    // If MRT2/Wolff strictly require mat, we keep mat but optimize loading.
+    mat prim_vic(N, pv);
+    
     ifstream pr_v;
     pr_v.open(p_v_path);
-    for (int i = 0; i < N; ++i){//import matrix of the first nearest neighbours
-        for (int j = 0; j < pv; ++j){
-            pr_v >> prim_vic(i,j);
+    if(pr_v.is_open()) {
+        for (int i = 0; i < N; ++i){
+            for (int j = 0; j < pv; ++j){
+                pr_v >> prim_vic(i,j);
+            }
         }
+        pr_v.close();
     }
-    pr_v.close();
 
     osservabili.open(obs_path);
     dati.open(dati_path);
@@ -197,86 +194,90 @@ void obs_T(mat &r, double J, double T_c, double L, int *data){
         if (c_Tm!=-1){
             T = T_c + 0.5;
         }
-        cout<<"Computing T = "<<T<<endl;
+        
+        cout << "Computing T = " << T << "\n"; // Replaced endl
         int passi_eq;
 
+        // Optimization: Pre-calculate constants for N_t logic
         if(prog_t==2){
             T_scaled = (T - T_c) / T_c;
-            passi_eq = 5 * N;//sufficient to get out of transition phase
-            N_t = 2e4 + passi_eq + T * 300;
+            passi_eq = 5 * N;
+            N_t = 20000 + passi_eq + (int)(T * 300);
+            
             if(L==32){
                 passi_eq += 9*N; 
-                N_t = 5e4 + passi_eq + T * 1000;
+                N_t = 50000 + passi_eq + (int)(T * 1000);
             }
             else if(L==64){
                 passi_eq += 12*N; 
-                N_t = 7e4 + passi_eq + T * 2000;
+                N_t = 70000 + passi_eq + (int)(T * 2000);
             }
         }
         else{
             T_scaled = (T - T_c) / T_c;
-            passi_eq = 70 * N * N;//sufficient to get out of transition phase
+            passi_eq = 70 * N * N;
+            
             if (L==64){
-                N_t = 4e7 + passi_eq;
-                if(T>T_c-0.6 && T<T_c+0.4){
-                    N_t+=2e7;
-                }
+                N_t = 40000000 + passi_eq;
+                if(T>T_c-0.6 && T<T_c+0.4) N_t += 20000000;
             }
             else if(L==32){
-                N_t = 1e7 + passi_eq;
-                if(T>T_c-0.6 && T<T_c+0.4){
-                    N_t+=7e6;
-                }
+                N_t = 10000000 + passi_eq;
+                if(T>T_c-0.6 && T<T_c+0.4) N_t += 7000000;
             }
             else if(L==16){
-                N_t = 5e6 + passi_eq;
-                if(T>T_c-0.6 && T<T_c+0.4){
-                    N_t+=3e6;
-                }
+                N_t = 5000000 + passi_eq;
+                if(T>T_c-0.6 && T<T_c+0.4) N_t += 3000000;
             }
             else{
-                 N_t = 2e6 + passi_eq;
-                 if(T>T_c-0.6 && T<T_c+0.4){
-                    N_t+=2e6;
-                }
+                 N_t = 2000000 + passi_eq;
+                 if(T>T_c-0.6 && T<T_c+0.4) N_t += 2000000;
             }
-            N_t += T*5e4;
+            N_t += (int)(T*50000);
         }
-        if (c_Tm!=-1){//to show the equilibration
+        
+        //to show the equilibration
+        if (c_Tm!=-1){
             passi_eq=0;
         }
 
-        double V = 0, V_m = 0;
-        double magn_media = 0, V_quadro_m = 0;
-        double M_quadro_mean = 0, M_quarta_mean = 0;
+        // ACCUMULATORS for speed (avoid multiply/divide every step)
+        double sum_V = 0, sum_V2 = 0;
+        double sum_M = 0, sum_M2 = 0, sum_M4 = 0;
+        double sum_dim = 0;
+
+        // Result holders
+        double V_m = 0, V_quadro_m = 0, dim_media = 0;
+        double magn_media = 0, M_quadro_mean = 0, M_quarta_mean = 0;
         double chi = 0, chi_ist, chi_scaled;
         double c_v = 0, c_v_ist;
-        double dim_media = 0;
         double binder_ratio = 0, binder_ratio_ist;
+        
+        // Pre-compute inverse temperature for speed
+        double inv_T = 1.0 / T;
+        double inv_T2 = 1.0 / (T * T);
+        double inv_N = 1.0 / N;
+        double L_pow_175 = pow(L, 1.75);
 
-
+        double V = 0;
         magn = 0;
+        
+        // Initial configuration calculation
         for (int i = 0; i < N; ++i){
-        //calculation for the initial value of potential and magnation
             V += potenziale_ising(r, J, i, prim_vic);
-            magn += r(i,2)/N;
+            magn += r(i,2); 
         }
-        V /= 2;//if not every interaction is counted twice
+        magn *= inv_N;
+        V *= 0.5;
 
         ofstream dati_blocking;
         dati_blocking.open("out/dati_blocking.txt");
-        
-        for (int i = 0; i < N_t; ++i){//iterations
-            if(i>passi_eq){//calculation of the means
-                V_m = V_m * (i - passi_eq - 1.0);
-                V_quadro_m = V_quadro_m * (i - passi_eq - 1.0);
-                dim_media = dim_media * (i - passi_eq - 1.0);
-
-                magn_media = magn_media * (i - passi_eq - 1.0);
-                M_quadro_mean = M_quadro_mean * (i - passi_eq - 1.0);
-                M_quarta_mean = M_quarta_mean * (i - passi_eq - 1.0);
-            }
+        // Ensure standard formatting is efficient
+        dati_blocking.precision(6);
+       
+        for (int i = 0; i < N_t; ++i){
             
+            // PHYSICS ENGINE CALLS
             if(prog_t==0){
                 MRT2(r, &V, T, J, prim_vic);
             }
@@ -286,60 +287,89 @@ void obs_T(mat &r, double J, double T_c, double L, int *data){
             else{
                 Wolff(r, &V, T, J, prim_vic);
             }
-    
-            if(i>passi_eq){//calculation of the means
-                V_m = (V_m + V) / (i - passi_eq);
-                V_quadro_m = (V_quadro_m + pow1(V,2)) / (i - passi_eq);
-                dim_media = (dim_media * N + dimensione) / ((i - passi_eq) * N);
-
-                magn_media = (magn_media + abs(magn)) / (i - passi_eq);
-                M_quadro_mean = (M_quadro_mean + pow1(magn,2)) / (i - passi_eq);
-                M_quarta_mean = (M_quarta_mean + pow1(magn,4)) / (i - passi_eq);
-
-                chi_ist = N * pow1(abs(magn) - magn_media, 2) / T;
-                chi = N * (M_quadro_mean - pow1(magn_media, 2)) / T;
-                chi_scaled = chi / pow(L,1.75);
-
-                c_v_ist = pow1(V - V_m, 2) / (N * pow1(T,2));
-                c_v = (V_quadro_m - pow1(V_m, 2)) / (N * pow1(T,2));
-
-                binder_ratio = 1. - M_quarta_mean / (3 * pow1(M_quadro_mean, 2));
-                binder_ratio_ist = 1. - pow1(magn,4) / (3*pow1(M_quadro_mean,2));
-
-                dati_blocking << abs(magn) << "\t" << chi_ist << "\t";
-                dati_blocking << c_v_ist << "\t" << binder_ratio_ist << "\t";
-                dati_blocking << dimensione << endl;
-                //used to find the actual error
+   
+            if(i > passi_eq){
+                // UPDATE ACCUMULATORS (Faster than recursive mean)
+                double abs_magn = std::abs(magn);
+                double magn2 = magn * magn;
                 
+                sum_V += V;
+                sum_V2 += V * V;
+                sum_dim += dimensione; // Assuming 'dimensione' is global updated by Wolff
+                
+                sum_M += abs_magn;
+                sum_M2 += magn2;
+                sum_M4 += magn2 * magn2;
+                
+                // CALCULATE INSTANTANEOUS MEAN
+                double count = (double)(i - passi_eq);
+                double inv_count = 1.0 / count;
+
+                V_m = sum_V * inv_count;
+                V_quadro_m = sum_V2 * inv_count;
+                dim_media = sum_dim * inv_count * inv_N; // combined divisions
+
+                magn_media = sum_M * inv_count;
+                M_quadro_mean = sum_M2 * inv_count;
+                M_quarta_mean = sum_M4 * inv_count;
+
+                // OBSERVABLES
+                double diff_magn = abs_magn - magn_media;
+                chi_ist = N * (diff_magn * diff_magn) * inv_T;
+                
+                double diff_mag_sq = M_quadro_mean - (magn_media * magn_media);
+                chi = N * diff_mag_sq * inv_T;
+                
+                chi_scaled = chi / L_pow_175;
+
+                double diff_V = V - V_m;
+                c_v_ist = (diff_V * diff_V) * inv_N * inv_T2;
+                
+                double diff_V_sq = V_quadro_m - (V_m * V_m);
+                c_v = diff_V_sq * inv_N * inv_T2;
+
+                binder_ratio = 1.0 - M_quarta_mean / (3.0 * M_quadro_mean * M_quadro_mean);
+                binder_ratio_ist = 1.0 - (magn2 * magn2) / (3.0 * M_quadro_mean * M_quadro_mean);
+
+                dati_blocking << abs_magn << "\t" << chi_ist << "\t"
+                              << c_v_ist << "\t" << binder_ratio_ist << "\t"
+                              << dimensione << "\n";
+               
                 if (c_Tm!=-1){
-                    dati << i << "\t" << dim_media*N << "\t" << c_v << endl;
-                    osservabili << i << "\t" << magn_media << "\t" << chi;
-                    osservabili << "\t" << binder_ratio << endl;
+                    dati << i << "\t" << dim_media*N << "\t" << c_v << "\n";
+                    osservabili << i << "\t" << magn_media << "\t" << chi
+                                << "\t" << binder_ratio << "\n";
                 }            
             }
+            
+            // SNAPSHOT LOGIC
             if (pv==4 && c_Tm!=-1 && c_Lm!=-1){
-                if(i==0 || i==10-1 || i==1e2-1 || i==1e3-1 || i==1e4-1){
-                    configurations(r,i,L);
-                }
-                if(i==1e5-1 || i==1e6-1 || i==1e7-1 || i==1e8-1){
-                    configurations(r,i,L);
-                }
-                if (i==10 || i==11 || i==12 || i==13){
+                // Optimized check using simple integer comparisons
+                bool save = (i==0 || i==9 || i==99 || i==999 || i==9999 || 
+                             i==99999 || i==999999 || i==9999999 || i==99999999 ||
+                             i==10 || i==11 || i==12 || i==13);
+                if(save){
                     configurations(r,i,L);
                 }
             }
         }
+        
         dati_blocking.close();
+        
         rowvec sigma(5, fill::value(0));
+
         // true error for magnation, magnetic susceptibility, specific heat
         // and dimension of the clusters
         err_max_blocking(N_t-passi_eq, sigma, 5);
+        
         results_scaled << T_scaled*L << "\t" << chi_scaled << "\t";
-        results_scaled << sigma(1) / pow(L,1.75) << endl;
+        results_scaled << sigma(1) / L_pow_175 << "\n";
+        
         risultati << T << "\t" << magn_media << "\t" << sigma(0) << "\t" << chi;
         risultati << "\t" << sigma(1) << "\t" << binder_ratio << "\t" << sigma(3);
         risultati << "\t" << L << "\t" << c_v << "\t" << sigma(2) << "\t";
-        risultati << dim_media << "\t" << sigma(4)/N << endl;
+        risultati << dim_media << "\t" << sigma(4)/N << "\n";
+
         if (c_Tm!=-1){
             blocking(N_t, 5);
             jackknife(N_t,5);

@@ -1,4 +1,5 @@
 out/
 pdf/
 main.out
-src/.*o
+main.o
+src/*.o
